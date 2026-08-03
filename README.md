@@ -23,6 +23,8 @@ Amazonの新品・中古相場を自動取得する場合はKeepa APIキーも�
 
 Yahoo!ショッピングのClient ID、PriceCharting APIトークン、eBay Application access tokenを登録すると、それぞれの相場も自動集計します。eBay価格は通貨を明示し、現段階では為替換算せず表示します。
 
+API設定はWindows DPAPIで暗号化し、WindowsユーザーのLocalApplicationData内へ保存します。設定ファイルやAPIキーをGitHubへ登録しないでください。
+
 ## 操作
 
 1. 画面上部の入力欄を選択する
