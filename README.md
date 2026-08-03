@@ -32,3 +32,6 @@ Yahoo!ショッピングのClient ID、PriceCharting APIトークン、eBay Appl
 
 販売前にはAPIキーの暗号化、利用規約、検索履歴、実物バーコードでの検証を追加してください。
 
+- 挙動確認結果: `TEST_REPORT.md`
+- ドメイン候補: `DOMAIN_CANDIDATES.md`
+
