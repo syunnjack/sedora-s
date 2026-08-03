@@ -1,4 +1,6 @@
 using System.Net;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 
 namespace BarcodeWorkInfoComplete;
@@ -302,13 +304,64 @@ public sealed class MainForm : Form
     private static string ApiMessage(string b) { try { using var d = JsonDocument.Parse(b); return S(d.RootElement, "error_description") ?? S(d.RootElement, "message") ?? "詳細不明"; } catch { return "詳細不明"; } }
 
     private string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BarcodeWorkInfo", "settings.json");
-    private void SaveSettings() { Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!); File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new ApiSettings(appIdBox.Text.Trim(), accessKeyBox.Text.Trim(), keepaKeyBox.Text.Trim(), yahooClientIdBox.Text.Trim(), priceChartingTokenBox.Text.Trim(), ebayTokenBox.Text.Trim()))); status.Text = "API設定を保存しました。"; codeBox.Focus(); }
-    private void LoadSettings() { try { if (!File.Exists(SettingsPath)) return; var s = JsonSerializer.Deserialize<ApiSettings>(File.ReadAllText(SettingsPath)); appIdBox.Text = s?.ApplicationId ?? ""; accessKeyBox.Text = s?.AccessKey ?? ""; keepaKeyBox.Text = s?.KeepaKey ?? ""; yahooClientIdBox.Text = s?.YahooClientId ?? ""; priceChartingTokenBox.Text = s?.PriceChartingToken ?? ""; ebayTokenBox.Text = s?.EbayToken ?? ""; } catch { } }
+    private void SaveSettings()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+        var settings = new ApiSettings(appIdBox.Text.Trim(), accessKeyBox.Text.Trim(), keepaKeyBox.Text.Trim(), yahooClientIdBox.Text.Trim(), priceChartingTokenBox.Text.Trim(), ebayTokenBox.Text.Trim());
+        byte[] encrypted = SecretProtector.Protect(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(settings)));
+        File.WriteAllText(SettingsPath, Convert.ToBase64String(encrypted));
+        status.Text = "API設定をWindows DPAPI暗号化で保存しました。"; codeBox.Focus();
+    }
+
+    private void LoadSettings()
+    {
+        try
+        {
+            if (!File.Exists(SettingsPath)) return;
+            string stored = File.ReadAllText(SettingsPath);
+            string json;
+            try { json = Encoding.UTF8.GetString(SecretProtector.Unprotect(Convert.FromBase64String(stored))); }
+            catch { json = stored; } // 旧版の平文設定を一度だけ読み込む
+            var s = JsonSerializer.Deserialize<ApiSettings>(json);
+            appIdBox.Text = s?.ApplicationId ?? ""; accessKeyBox.Text = s?.AccessKey ?? ""; keepaKeyBox.Text = s?.KeepaKey ?? "";
+            yahooClientIdBox.Text = s?.YahooClientId ?? ""; priceChartingTokenBox.Text = s?.PriceChartingToken ?? ""; ebayTokenBox.Text = s?.EbayToken ?? "";
+        }
+        catch { status.Text = "保存済みAPI設定を読み込めませんでした。再入力してください。"; }
+    }
 
     private sealed record Work(string Title, string? Creator, string? Publisher, string? Date, string? Description, string? Image, string? Url, string Category, string Source);
     private sealed record ApiSettings(string ApplicationId, string AccessKey, string KeepaKey, string YahooClientId, string PriceChartingToken, string EbayToken);
     private sealed record MarketPrice(string Source, string Condition, decimal Price);
     private sealed record MarketSummary(List<MarketPrice> Prices, decimal Lowest, decimal Median, decimal SuggestedPrice);
+}
+
+internal static class SecretProtector
+{
+    [StructLayout(LayoutKind.Sequential)] private struct DataBlob { public int Length; public IntPtr Data; }
+    [DllImport("Crypt32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool CryptProtectData(ref DataBlob input, string? description, IntPtr entropy, IntPtr reserved, IntPtr prompt, int flags, ref DataBlob output);
+    [DllImport("Crypt32.dll", SetLastError = true)]
+    private static extern bool CryptUnprotectData(ref DataBlob input, IntPtr description, IntPtr entropy, IntPtr reserved, IntPtr prompt, int flags, ref DataBlob output);
+    [DllImport("Kernel32.dll")] private static extern IntPtr LocalFree(IntPtr memory);
+
+    public static byte[] Protect(byte[] value) => Transform(value, true);
+    public static byte[] Unprotect(byte[] value) => Transform(value, false);
+
+    private static byte[] Transform(byte[] value, bool protect)
+    {
+        var input = new DataBlob { Length = value.Length, Data = Marshal.AllocHGlobal(value.Length) };
+        var output = new DataBlob();
+        try
+        {
+            Marshal.Copy(value, 0, input.Data, value.Length);
+            bool ok = protect
+                ? CryptProtectData(ref input, "sedora-s API settings", IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 4, ref output)
+                : CryptUnprotectData(ref input, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 4, ref output);
+            if (!ok) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            byte[] result = new byte[output.Length]; Marshal.Copy(output.Data, result, 0, output.Length); return result;
+        }
+        finally { Marshal.FreeHGlobal(input.Data); if (output.Data != IntPtr.Zero) LocalFree(output.Data); }
+    }
 }
 
 internal static class Barcode
