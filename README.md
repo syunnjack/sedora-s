@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 0.8 seconds
-Output:
 # JAN・ISBN・DVD/Blu-ray 作品情報検索
 
 USBバーコードリーダーが数字とEnterを送信する一般的な「キーボード入力型」で利用できます。
