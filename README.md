@@ -21,6 +21,8 @@ ISBNはGoogle Booksから検索します。JANおよび楽天Books検索には�
 
 Amazonの新品・中古相場を自動取得する場合はKeepa APIキーも入力します。キーがない場合でも楽天市場相場の自動集計は動作します。Amazon公式API、Keepa、他市場のデータは、それぞれ正規の契約・認証情報が必要です。
 
+Yahoo!ショッピングのClient ID、PriceCharting APIトークン、eBay Application access tokenを登録すると、それぞれの相場も自動集計します。eBay価格は通貨を明示し、現段階では為替換算せず表示します。
+
 ## 操作
 
 1. 画面上部の入力欄を選択する
