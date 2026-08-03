@@ -8,14 +8,7 @@
     <AssemblyName>JAN_ISBN_DVD作品検索</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="Microsoft.Web.WebView2.Core">
-      <HintPath>lib\Microsoft.Web.WebView2.Core.dll</HintPath>
-      <Private>true</Private>
-    </Reference>
-    <Reference Include="Microsoft.Web.WebView2.WinForms">
-      <HintPath>lib\Microsoft.Web.WebView2.WinForms.dll</HintPath>
-      <Private>true</Private>
-    </Reference>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3719.77" />
   </ItemGroup>
 </Project>
 
