@@ -14,6 +14,9 @@ public sealed class MainForm : Form
     private readonly TextBox appIdBox = new() { PlaceholderText = "楽天アプリID" };
     private readonly TextBox accessKeyBox = new() { PlaceholderText = "楽天アクセスキー", UseSystemPasswordChar = true };
     private readonly TextBox keepaKeyBox = new() { PlaceholderText = "Keepa APIキー（Amazon新品・中古相場、自動判定用）", UseSystemPasswordChar = true };
+    private readonly TextBox yahooClientIdBox = new() { PlaceholderText = "Yahoo!ショッピング Client ID", UseSystemPasswordChar = true };
+    private readonly TextBox priceChartingTokenBox = new() { PlaceholderText = "PriceCharting APIトークン", UseSystemPasswordChar = true };
+    private readonly TextBox ebayTokenBox = new() { PlaceholderText = "eBay Application access token", UseSystemPasswordChar = true };
     private readonly Button saveSettingsButton = new() { Text = "API設定を保存" };
     private readonly NumericUpDown costBox = MoneyBox();
     private readonly NumericUpDown saleBox = MoneyBox();
@@ -52,10 +55,12 @@ public sealed class MainForm : Form
         status.SetBounds(24, 76, 961, 24); status.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         input.Controls.AddRange([codeBox, searchButton, progress, status]);
 
-        var settings = new Panel { Dock = DockStyle.Bottom, Height = 84, Padding = new Padding(24, 8, 24, 8), BackColor = Color.FromArgb(232, 238, 244) };
+        var settings = new Panel { Dock = DockStyle.Bottom, Height = 145, Padding = new Padding(24, 8, 24, 8), BackColor = Color.FromArgb(232, 238, 244) };
         appIdBox.SetBounds(24, 12, 250, 27); accessKeyBox.SetBounds(286, 12, 430, 27); saveSettingsButton.SetBounds(728, 11, 150, 29);
         keepaKeyBox.SetBounds(24, 45, 692, 27);
-        settings.Controls.AddRange([appIdBox, accessKeyBox, keepaKeyBox, saveSettingsButton]);
+        yahooClientIdBox.SetBounds(24, 76, 330, 27); priceChartingTokenBox.SetBounds(366, 76, 350, 27);
+        ebayTokenBox.SetBounds(24, 107, 692, 27);
+        settings.Controls.AddRange([appIdBox, accessKeyBox, keepaKeyBox, yahooClientIdBox, priceChartingTokenBox, ebayTokenBox, saveSettingsButton]);
 
         var calculator = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 52, Padding = new Padding(20, 10, 20, 6), BackColor = Color.FromArgb(245, 249, 243), WrapContents = false };
         calculator.Controls.AddRange([new Label { Text = "利益計算　仕入", AutoSize = true, Margin = new Padding(4, 5, 3, 0) }, costBox,
@@ -179,10 +184,82 @@ public sealed class MainForm : Form
             }
             catch { }
         }
-        var valid = prices.Select(x => x.Price).OrderBy(x => x).ToArray();
+        await AddYahooPricesAsync(code, prices);
+        await AddPriceChartingPricesAsync(code, prices);
+        await AddEbayPricesAsync(code, prices);
+        var valid = prices.Where(x => x.Source != "eBay" && x.Source != "PriceCharting").Select(x => x.Price).OrderBy(x => x).ToArray();
         decimal median = valid.Length == 0 ? 0 : valid.Length % 2 == 1 ? valid[valid.Length / 2] : (valid[valid.Length / 2 - 1] + valid[valid.Length / 2]) / 2;
-        decimal suggested = prices.Where(x => x.Condition.Contains("中古")).Select(x => x.Price).DefaultIfEmpty(median).Min();
+        decimal suggested = prices.Where(x => x.Source != "eBay" && x.Source != "PriceCharting" && x.Condition.Contains("中古")).Select(x => x.Price).DefaultIfEmpty(median).Min();
         return new(prices, valid.FirstOrDefault(), median, suggested);
+    }
+
+    private async Task AddYahooPricesAsync(string code, List<MarketPrice> prices)
+    {
+        if (string.IsNullOrWhiteSpace(yahooClientIdBox.Text)) return;
+        string url = "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch" +
+            $"?appid={Uri.EscapeDataString(yahooClientIdBox.Text.Trim())}&jan_code={Uri.EscapeDataString(code)}&results=50";
+        try
+        {
+            using var d = await GetJsonAsync(url);
+            if (!d.RootElement.TryGetProperty("hits", out var hits) || hits.ValueKind != JsonValueKind.Array) return;
+            foreach (var x in hits.EnumerateArray())
+            {
+                if (!x.TryGetProperty("price", out var p) || !p.TryGetDecimal(out decimal value) || value <= 0) continue;
+                string condition = S(x, "condition") ?? "出品価格";
+                string seller = x.TryGetProperty("seller", out var s) ? S(s, "name") ?? "Yahoo!ショッピング" : "Yahoo!ショッピング";
+                prices.Add(new($"Yahoo! / {seller}", condition, value));
+            }
+        }
+        catch { }
+    }
+
+    private async Task AddPriceChartingPricesAsync(string code, List<MarketPrice> prices)
+    {
+        if (string.IsNullOrWhiteSpace(priceChartingTokenBox.Text)) return;
+        string url = $"https://www.pricecharting.com/api/products?t={Uri.EscapeDataString(priceChartingTokenBox.Text.Trim())}&q={Uri.EscapeDataString(code)}";
+        try
+        {
+            using var d = await GetJsonAsync(url);
+            if (!d.RootElement.TryGetProperty("products", out var products) || products.ValueKind != JsonValueKind.Array) return;
+            foreach (var x in products.EnumerateArray().Take(5))
+            {
+                AddPc(prices, x, "loose-price", "本体のみ／未鑑定");
+                AddPc(prices, x, "cib-price", "箱・説明書付き");
+                AddPc(prices, x, "new-price", "新品・未開封");
+                AddPc(prices, x, "graded-price", "鑑定品");
+            }
+        }
+        catch { }
+    }
+
+    private static void AddPc(List<MarketPrice> prices, JsonElement product, string field, string condition)
+    {
+        if (!product.TryGetProperty(field, out var p) || !p.TryGetDecimal(out decimal cents) || cents <= 0) return;
+        prices.Add(new("PriceCharting", condition + " (USD)", cents / 100m));
+    }
+
+    private async Task AddEbayPricesAsync(string code, List<MarketPrice> prices)
+    {
+        if (string.IsNullOrWhiteSpace(ebayTokenBox.Text)) return;
+        string url = "https://api.ebay.com/buy/browse/v1/item_summary/search" +
+            $"?gtin={Uri.EscapeDataString(code)}&limit=50&filter=conditions:%7BUSED%7D";
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ebayTokenBox.Text.Trim());
+            request.Headers.Add("X-EBAY-C-MARKETPLACE-ID", "EBAY_US");
+            using var response = await Http.SendAsync(request); string body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode) return;
+            using var d = JsonDocument.Parse(body);
+            if (!d.RootElement.TryGetProperty("itemSummaries", out var items)) return;
+            foreach (var x in items.EnumerateArray())
+            {
+                if (!x.TryGetProperty("price", out var p) || !decimal.TryParse(S(p, "value"), out decimal value) || value <= 0) continue;
+                string currency = S(p, "currency") ?? "USD";
+                prices.Add(new("eBay", $"{S(x, "condition") ?? "Used"} ({currency})", value));
+            }
+        }
+        catch { }
     }
 
     private static void AddKeepa(List<MarketPrice> prices, JsonElement current, int index, string condition)
@@ -225,11 +302,11 @@ public sealed class MainForm : Form
     private static string ApiMessage(string b) { try { using var d = JsonDocument.Parse(b); return S(d.RootElement, "error_description") ?? S(d.RootElement, "message") ?? "詳細不明"; } catch { return "詳細不明"; } }
 
     private string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BarcodeWorkInfo", "settings.json");
-    private void SaveSettings() { Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!); File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new ApiSettings(appIdBox.Text.Trim(), accessKeyBox.Text.Trim(), keepaKeyBox.Text.Trim()))); status.Text = "API設定を保存しました。"; codeBox.Focus(); }
-    private void LoadSettings() { try { if (!File.Exists(SettingsPath)) return; var s = JsonSerializer.Deserialize<ApiSettings>(File.ReadAllText(SettingsPath)); appIdBox.Text = s?.ApplicationId ?? ""; accessKeyBox.Text = s?.AccessKey ?? ""; keepaKeyBox.Text = s?.KeepaKey ?? ""; } catch { } }
+    private void SaveSettings() { Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!); File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new ApiSettings(appIdBox.Text.Trim(), accessKeyBox.Text.Trim(), keepaKeyBox.Text.Trim(), yahooClientIdBox.Text.Trim(), priceChartingTokenBox.Text.Trim(), ebayTokenBox.Text.Trim()))); status.Text = "API設定を保存しました。"; codeBox.Focus(); }
+    private void LoadSettings() { try { if (!File.Exists(SettingsPath)) return; var s = JsonSerializer.Deserialize<ApiSettings>(File.ReadAllText(SettingsPath)); appIdBox.Text = s?.ApplicationId ?? ""; accessKeyBox.Text = s?.AccessKey ?? ""; keepaKeyBox.Text = s?.KeepaKey ?? ""; yahooClientIdBox.Text = s?.YahooClientId ?? ""; priceChartingTokenBox.Text = s?.PriceChartingToken ?? ""; ebayTokenBox.Text = s?.EbayToken ?? ""; } catch { } }
 
     private sealed record Work(string Title, string? Creator, string? Publisher, string? Date, string? Description, string? Image, string? Url, string Category, string Source);
-    private sealed record ApiSettings(string ApplicationId, string AccessKey, string KeepaKey);
+    private sealed record ApiSettings(string ApplicationId, string AccessKey, string KeepaKey, string YahooClientId, string PriceChartingToken, string EbayToken);
     private sealed record MarketPrice(string Source, string Condition, decimal Price);
     private sealed record MarketSummary(List<MarketPrice> Prices, decimal Lowest, decimal Median, decimal SuggestedPrice);
 }
